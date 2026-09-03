@@ -80,6 +80,25 @@ def get_gift_card(token, gift_card_id):
     return graphql(token, query, {"id": gift_card_id})
 
 
+def list_gift_cards(token):
+    query = """
+    query GiftCardList {
+      giftCards(first: 50, query: "status:enabled") {
+        nodes {
+          id
+          lastCharacters
+          balance {
+            amount
+            currencyCode
+          }
+        }
+      }
+    }
+    """
+
+    return graphql(token, query, {})
+
+
 def credit_gift_card(token, gift_card_id, amount, currency):
     mutation = """
     mutation GiftCardCredit(
@@ -313,15 +332,16 @@ HTML = """
         <form method="post">
             <input type="hidden" name="action" value="lookup">
 
-            <label>Shopify Gift Card ID</label>
-            <input
-                type="text"
-                name="gift_card_id"
-                placeholder="Example: 671479660835"
-                required
-            >
+            <label>Select Gift Card</label>
+            <select name="gift_card_id" required>
+                {% for card in gift_cards %}
+                <option value="{{ card.numeric_id }}">
+                    **** {{ card.last_chars }} — ${{ card.balance }} {{ card.currency }}
+                </option>
+                {% endfor %}
+            </select>
 
-            <button type="submit">Find Gift Card</button>
+            <button type="submit">Continue</button>
         </form>
 
         {% elif stage == "amount" %}
@@ -416,12 +436,40 @@ HTML = """
 @app.route("/", methods=["GET", "POST"])
 def home():
     if request.method == "GET":
-        return render_template_string(
-            HTML,
-            stage="lookup",
-            error=None,
-            success=False,
-        )
+        try:
+            token = get_access_token()
+            result = list_gift_cards(token)
+
+            if result.get("errors"):
+                raise Exception(result["errors"][0]["message"])
+
+            nodes = result.get("data", {}).get("giftCards", {}).get("nodes", [])
+
+            gift_cards = []
+            for card in nodes:
+                gift_cards.append({
+                    "numeric_id": card["id"].split("/")[-1],
+                    "last_chars": card["lastCharacters"],
+                    "balance": f'{Decimal(card["balance"]["amount"]):.2f}',
+                    "currency": card["balance"]["currencyCode"],
+                })
+
+            return render_template_string(
+                HTML,
+                stage="lookup",
+                error=None,
+                success=False,
+                gift_cards=gift_cards,
+            )
+
+        except Exception as e:
+            return render_template_string(
+                HTML,
+                stage="lookup",
+                error=f"Could not load Gift Cards: {e}",
+                success=False,
+                gift_cards=[],
+            )
 
     action = request.form.get("action")
 
